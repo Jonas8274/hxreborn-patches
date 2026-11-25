@@ -1,0 +1,36 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.athan.misc.promotion
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.athan.misc.fix.signature.spoofSignaturePatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+
+@Suppress("unused")
+val removePromotionsPatch = patch(
+    name = "Remove promotions",
+    description = "Removes the Athan Academy banner in the Quran tab, and the Academy popup and teacher " +
+        "feedback bar in the chapter reader.",
+) {
+    compatibleWith(AppCompatibilities.ATHAN)
+
+    dependsOn(spoofSignaturePatch)
+
+    execute {
+        QuranReaderBannerConfigFingerprint.method.addInstructions(
+            0,
+            """
+                const/4 v0, 0x0
+                return-object v0
+            """,
+        )
+
+        AthanAcademyBannerDismissedFingerprint.method.returnEarly(true)
+
+        AthanAcademyPopupDontAskAgainFingerprint.method.returnEarly(true)
+    }
+}

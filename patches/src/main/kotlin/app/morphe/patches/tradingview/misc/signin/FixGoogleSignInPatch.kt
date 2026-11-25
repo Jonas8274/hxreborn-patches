@@ -1,0 +1,21 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.tradingview.misc.signin
+
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.shared.compat.AppCompatibilities
+
+@Suppress("unused")
+val fixGoogleSignInPatch = patch(
+    name = "Fix Google sign-in",
+    description = "Signs in with Google through a web page.",
+) {
+    compatibleWith(AppCompatibilities.TRADINGVIEW)
+
+    execute {
+        GoogleSignInEnabledFingerprint.method.returnEarly(false)
+    }
+}
