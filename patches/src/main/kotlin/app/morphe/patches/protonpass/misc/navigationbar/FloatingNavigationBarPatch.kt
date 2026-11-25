@@ -1,0 +1,128 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.protonpass.misc.navigationbar
+
+import app.morphe.patcher.Match
+import app.morphe.patcher.extensions.InstructionExtensions.replaceInstruction
+import app.morphe.patcher.patch.Patch
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.shared.misc.extension.protonFloatingNavigationBarExtensionPatch
+import app.morphe.patches.shared.misc.smali.addStaticMethod
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patches.shared.misc.proton.installMeasuredBottomInsets
+import com.android.tools.smali.dexlib2.iface.instruction.RegisterRangeInstruction
+import app.morphe.patches.protonpass.misc.settings.patchesSettingsPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.proton.FLOATING_NAVIGATION_BAR_CLASS
+import app.morphe.patches.shared.misc.proton.bindNavigationBarPreview
+import app.morphe.patches.shared.misc.proton.injectFloatingNavigationBar
+import app.morphe.patches.shared.misc.proton.markFloatingNavigationBarPatched
+import app.morphe.patches.shared.misc.proton.markPatchMetadata
+import app.morphe.patches.shared.misc.smali.descriptor
+import app.morphe.patches.shared.misc.smali.replaceStub
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+
+@Suppress("unused")
+val floatingNavigationBarPatch: Patch = patch(
+    name = "Floating navigation bar",
+    description = "Adds optional floating navigation with adjustable blur and glass.",
+) {
+    compatibleWith(AppCompatibilities.PROTON_PASS, AppCompatibilities.PROTON_PASS_FDROID)
+    dependsOn(protonFloatingNavigationBarExtensionPatch)
+    dependsOn(patchesSettingsPatch)
+
+    var contentPadding: Match? = null
+
+    execute {
+        bindNavigationBarPreview(
+            icons = listOf(
+                "ic_proton_list_bullets",
+                "ic_proton_plus",
+                "ic_shield_monitor_ok",
+                "ic_proton_user",
+            ),
+            labels = listOf(
+                "bottom_bar_list_items_icon_content_description",
+                "bottom_bar_add_item_icon_content_description",
+                "bottom_bar_security_center_icon_content_description",
+                "bottom_bar_profile_icon_content_description",
+            ),
+            showLabels = false,
+        )
+        AppContentPaddingFingerprint.clearMatch()
+        contentPadding = AppContentPaddingFingerprint.match()
+        markPatchMetadata("floatingNavigationBar", floatingNavigationBarPatch)
+        markFloatingNavigationBarPatched()
+        val insets = NavigationBarsPaddingFingerprint.matchOrNull()?.method
+        if (insets == null) {
+            installMeasuredBottomInsets(COMPOSE_MODIFIER)
+        } else {
+            mutableClassDefBy(FLOATING_NAVIGATION_BAR_CLASS).replaceStub(
+                "outerInsets",
+                2,
+                """
+                    check-cast p0, $COMPOSE_MODIFIER
+                    invoke-static { p0 }, ${descriptor(insets)}
+                    move-result-object p0
+                    return-object p0
+                """,
+            )
+        }
+        matchHomeBottomBar().let { match ->
+            val (navigationCall) = match.instructionMatches
+            val outer = navigationCall.methodReference
+            val nativeNavigation = nativeBottomNavigationFingerprint(outer).match()
+            val (nativeCall) = nativeNavigation.instructionMatches
+            val native = nativeCall.methodReference
+            val parameters = native.parameterTypes.map(CharSequence::toString)
+            check(parameters.count { it == "F" } == 1)
+            val elevationRegister = parameters.take(parameters.indexOf("F")).sumOf { if (it == "J" || it == "D") 2 else 1 }
+            val registers = parameters.sumOf { if (it == "J" || it == "D") 2 else 1 }
+            val bridge = mutableClassDefBy(FLOATING_NAVIGATION_BAR_CLASS).addStaticMethod(
+                "nativeBottomNavigation", parameters, "V", registers,
+                """
+                    invoke-static/range { p$elevationRegister .. p$elevationRegister }, $FLOATING_NAVIGATION_BAR_CLASS->elevation(F)F
+                    move-result p$elevationRegister
+                    invoke-static/range { p0 .. p${registers - 1} }, ${descriptor(native)}
+                    return-void
+                """,
+            )
+            val nativeRange = nativeCall.getInstruction<RegisterRangeInstruction>()
+            nativeNavigation.method.replaceInstruction(
+                nativeCall.index,
+                "invoke-static/range { v${nativeRange.startRegister} .. v${nativeRange.startRegister + nativeRange.registerCount - 1} }, $bridge",
+            )
+            injectFloatingNavigationBar(match.method, navigationCall.index)
+            if (insets == null) {
+                val animation = navigationInsetAnimationFingerprint(match.method).match()
+                val (animationCall) = animation.instructionMatches
+                val register = animationCall.getInstruction<RegisterRangeInstruction>().startRegister
+                match.method.addInstructions(
+                    animationCall.index,
+                    """
+                        invoke-static { v$register }, $FLOATING_NAVIGATION_BAR_CLASS->itemBottomPadding(F)F
+                        move-result v$register
+                    """,
+                )
+            } else {
+                val conversion = navigationInsetConversionFingerprint(match.method).match()
+                val (_, paddingResult) = conversion.instructionMatches
+                val register = paddingResult.getInstruction<OneRegisterInstruction>().registerA
+                match.method.addInstructions(
+                    paddingResult.index + 1,
+                    """
+                        invoke-static { v$register }, $FLOATING_NAVIGATION_BAR_CLASS->itemBottomPadding(F)F
+                        move-result v$register
+                    """,
+                )
+            }
+        }
+    }
+    finalize {
+        installFloatingContentPadding(checkNotNull(contentPadding))
+    }
+
+}
