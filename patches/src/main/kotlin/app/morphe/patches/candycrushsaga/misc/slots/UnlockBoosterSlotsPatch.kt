@@ -1,0 +1,31 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.candycrushsaga.misc.slots
+
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.candycrushsaga.shared.candyCrushModifiersPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.requireArm64StandardInstall
+import app.morphe.patches.shared.misc.smali.replaceStub
+
+private const val MODIFIERS = "Lapp/hxreborn/extension/candycrushsaga/GameModifiers;"
+
+@Suppress("unused")
+val unlockBoosterSlotsPatch = patch(
+    name = "Unlock booster slots",
+    description = "Unlocks all booster slots from the first level.",
+) {
+    compatibleWith(AppCompatibilities.CANDY_CRUSH_SAGA, AppCompatibilities.CANDY_CRUSH_SODA_SAGA)
+    availability(requireArm64StandardInstall)
+    dependsOn(candyCrushModifiersPatch)
+
+    execute {
+        mutableClassDefBy(MODIFIERS).replaceStub("slotsEnabled", 1, """
+            const/4 v0, 0x1
+            return v0
+        """)
+    }
+}

@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.pixlr.misc.tracking
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.replaceInstruction
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.analytics.SingularInitFingerprint
+import app.morphe.patches.shared.misc.analytics.deactivateFirebaseAnalyticsPatch
+import app.morphe.patches.shared.misc.analytics.disableAnalyticsCollectionPatch
+import app.morphe.patches.shared.misc.analytics.disableCrashlyticsCollectionPatch
+import app.morphe.patches.shared.misc.analytics.disableFirebaseSessionsPatch
+import com.android.tools.smali.dexlib2.iface.instruction.FiveRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+
+@Suppress("unused")
+val disableTrackingPatch = patch(
+    name = "Disable tracking",
+    description = "Disables Firebase Analytics, Singular, Facebook App Events, Crashlytics " +
+        "and the app's own usage events.",
+) {
+    compatibleWith(AppCompatibilities.PIXLR)
+
+    dependsOn(
+        disableAnalyticsCollectionPatch,
+        deactivateFirebaseAnalyticsPatch,
+        disableCrashlyticsCollectionPatch,
+        disableFirebaseSessionsPatch,
+    )
+
+    execute {
+        SingularInitFingerprint.method.returnEarly(false)
+
+        ActivateFacebookAppFingerprint.method.returnEarly()
+
+        EnableCrashlyticsCollectionFingerprint.match().apply {
+            val (enabledValue, _, putBoolean) = instructionMatches
+            val enabledRegister = enabledValue.getInstruction<OneRegisterInstruction>().registerA
+            val storedRegister = putBoolean.getInstruction<FiveRegisterInstruction>().registerE
+
+            method.addInstruction(putBoolean.index, "const/4 v$storedRegister, 0x0")
+            method.replaceInstruction(
+                enabledValue.index,
+                "sget-object v$enabledRegister, Ljava/lang/Boolean;->FALSE:Ljava/lang/Boolean;",
+            )
+        }
+
+        SendMobileEventsFingerprint.match().apply {
+            val (_, _, enabledResult) = instructionMatches
+            val enabledRegister = enabledResult.getInstruction<OneRegisterInstruction>().registerA
+            method.addInstruction(enabledResult.index + 1, "const/4 v$enabledRegister, 0x0")
+        }
+    }
+}

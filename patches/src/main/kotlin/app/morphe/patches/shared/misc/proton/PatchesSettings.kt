@@ -1,0 +1,166 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.shared.misc.proton
+
+import app.morphe.patcher.Fingerprint
+import app.morphe.patcher.InstructionLocation.MatchAfterImmediately
+import app.morphe.patcher.InstructionLocation.MatchAfterWithin
+import app.morphe.patcher.anyInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.fieldAccess
+import app.morphe.patcher.literal
+import app.morphe.patcher.methodCall
+import app.morphe.patcher.opcode
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.document
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.resource.ResourceType
+import app.morphe.patcher.resource.hasResourceId
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.shared.misc.hostedcomponents.CORE_COMPONENT_FACTORY
+import app.morphe.patches.shared.misc.hostedcomponents.ComponentHost
+import app.morphe.patches.shared.misc.hostedcomponents.HostedComponents
+import app.morphe.patches.shared.misc.smali.descriptor
+import app.morphe.patches.shared.misc.smali.replaceResourceIdStubs
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.reference.FieldReference
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+import java.util.logging.Logger
+import org.w3c.dom.Element
+
+private val logger = Logger.getLogger("PatchesSettings")
+
+internal const val SETTINGS_ROW_TITLE = "hxreborn patches"
+private const val SETTINGS_ACTIVITY_CLASS = "app.hxreborn.extension.proton.PatchesSettingsActivity"
+private const val BUNDLE_VERSION_RESOURCE = "/proton-bundle-version.txt"
+private const val PATCHES_THEME_CLASS = "${PROTON_EXTENSION_PACKAGE}PatchesTheme;"
+private const val APP_COMPAT_MODE_NIGHT_NO = 1
+private const val APP_COMPAT_MODE_NIGHT_YES = 2
+
+internal object CoreNightModeFingerprint : Fingerprint(
+    filters = listOf(
+        anyInstruction(
+            fieldAccess(opcode = Opcode.SGET, type = "I"),
+            methodCall(opcode = Opcode.INVOKE_STATIC, parameters = emptyList(), returnType = "I"),
+        ),
+        literal(APP_COMPAT_MODE_NIGHT_NO, location = MatchAfterWithin(2)),
+        opcode(Opcode.IF_EQ, location = MatchAfterImmediately()),
+        literal(APP_COMPAT_MODE_NIGHT_YES, location = MatchAfterImmediately()),
+        opcode(Opcode.IF_EQ, location = MatchAfterImmediately()),
+    ),
+)
+
+internal object AppCompatDelegateImplFingerprint : Fingerprint(
+    strings = listOf(
+        "Unknown value set for night mode. Please use one of the MODE_NIGHT values from AppCompatDelegate.",
+    ),
+)
+
+internal fun patchesSettingsActivityPatch(
+    themeStyle: String,
+    hostActivity: String,
+    settingsClass: String,
+) = patch {
+    val hostedComponents = HostedComponents(CORE_COMPONENT_FACTORY)
+    dependsOn(
+        switchColorsPatch,
+        hostedComponents.patch,
+        patch {
+            finalize {
+                document("AndroidManifest.xml").use { document ->
+                    val application = document.getElementsByTagName("application").item(0) as Element
+                    val activity = document.createElement("activity")
+                    activity.setAttribute("android:name", SETTINGS_ACTIVITY_CLASS)
+                    activity.setAttribute("android:exported", "false")
+                    activity.setAttribute("android:theme", themeStyle)
+                    application.appendChild(activity)
+                }
+            }
+        },
+    )
+    execute {
+        hostedComponents.host(SETTINGS_ACTIVITY_CLASS, ComponentHost("activity", hostActivity))
+        bindAppSettings(settingsClass)
+        try {
+            replacePatchesThemeStubs()
+        } catch (ex: PatchException) {
+            logger.warning("Skipped the patches screen theme: ${ex.message}")
+        }
+    }
+}
+
+private fun replacePatchesThemeStubs() {
+    with(mutableClassDefBy(PATCHES_THEME_CLASS)) {
+        replaceResourceIdStubs(
+            ResourceType.ATTR,
+            mapOf(
+                "backgroundNormAttribute" to "proton_background_norm",
+                "backgroundSecondaryAttribute" to "proton_background_secondary",
+                "textNormAttribute" to "proton_text_norm",
+                "textWeakAttribute" to "proton_text_weak",
+                "iconDisabledAttribute" to "proton_icon_disabled",
+            ),
+        )
+        val backArrow = if (hasResourceId(ResourceType.DRAWABLE, "ic_proton_arrow_left")) {
+            "ic_proton_arrow_left"
+        } else {
+            "ic_arrow_back"
+        }
+        replaceResourceIdStubs(
+            ResourceType.DRAWABLE,
+            mapOf(
+                "backArrowDrawable" to backArrow,
+                "chevronRightDrawable" to "ic_proton_chevron_right",
+                "checkmarkDrawable" to "ic_proton_checkmark",
+            ),
+        )
+    }
+}
+
+internal fun injectBundleVersion() {
+    val bundleVersion = PatchesSettingsVersion::class.java
+        .getResourceAsStream(BUNDLE_VERSION_RESOURCE)?.bufferedReader()?.use {
+            it.readText().trim()
+        } ?: throw PatchException("Patch bundle version resource $BUNDLE_VERSION_RESOURCE is unavailable")
+
+    mutableClassDefBy(PATCHES_MENU_CLASS).methods.single { it.name == "bundleVersion" }
+        .returnEarly(bundleVersion)
+}
+
+internal fun injectAppCompatDefaultNightMode() {
+    val appCompatDelegate = AppCompatDelegateImplFingerprint.originalClassDef.superclass
+    val nightModeReads = CoreNightModeFingerprint.matchAll()
+        .map { (it.instructionMatches.first().instruction as ReferenceInstruction).reference }
+        .filter {
+            val definingClass = when (it) {
+                is FieldReference -> it.definingClass
+                is MethodReference -> it.definingClass
+                else -> null
+            }
+            definingClass == appCompatDelegate
+        }
+        .distinctBy(Any::toString)
+    val nightModeRead = nightModeReads.singleOrNull()
+        ?: throw PatchException("Expected one AppCompat default night mode read, found $nightModeReads")
+
+    val readInstructions = when (nightModeRead) {
+        is FieldReference -> "sget v0, ${descriptor(nightModeRead)}"
+        is MethodReference ->
+            "invoke-static { }, ${descriptor(nightModeRead)}\nmove-result v0"
+        else -> throw PatchException("Unexpected night mode read: $nightModeRead")
+    }
+
+    mutableClassDefBy(PATCHES_THEME_CLASS).methods.single { it.name == "appCompatDefaultNightMode" }.addInstructions(
+        0,
+        """
+            $readInstructions
+            return v0
+        """,
+    )
+}
+
+private object PatchesSettingsVersion
