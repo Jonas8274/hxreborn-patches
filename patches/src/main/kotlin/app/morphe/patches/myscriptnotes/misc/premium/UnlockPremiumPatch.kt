@@ -1,0 +1,32 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.myscriptnotes.misc.premium
+
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.myscriptnotes.misc.pairip.restoreStartupPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.pairip.removePairipProtectionPatch
+import app.morphe.patches.shared.misc.requireArm64
+import app.morphe.patches.shared.misc.revenuecat.grantRevenueCatLifetimeEntitlement
+import app.morphe.patches.shared.misc.extension.sharedRevenuecatExtensionPatch
+
+private const val ENTITLEMENT = "MyScript Notes – Full Access"
+private const val PRODUCT = "msnotes_standard_lifetime"
+
+@Suppress("unused")
+val unlockPremiumPatch = patch(
+    name = "Unlock premium",
+    description = "Unlocks unlimited notes and pages, text conversion, shape and scratch-out gestures, " +
+        "PDF import and AI tools.",
+) {
+    dependsOn(sharedRevenuecatExtensionPatch)
+    compatibleWith(AppCompatibilities.MYSCRIPT_NOTES)
+    dependsOn(removePairipProtectionPatch, restoreStartupPatch)
+    availability(requireArm64)
+
+    execute {
+        grantRevenueCatLifetimeEntitlement(ENTITLEMENT, PRODUCT)
+    }
+}

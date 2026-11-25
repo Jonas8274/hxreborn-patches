@@ -1,0 +1,53 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.bereal.misc.privacy
+
+import app.morphe.patcher.patch.Patch
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.document
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.bereal.misc.base.beRealBasePatch
+import app.morphe.patches.bereal.misc.settings.BEREAL_EXTENSION_PACKAGE
+import app.morphe.patches.bereal.misc.settings.markFeaturePatched
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.requireStandardInstall
+import app.morphe.util.asSequence
+import org.w3c.dom.Element
+import app.morphe.patches.shared.misc.extension.berealContactsPermissionExtensionPatch
+
+private val contactsPermissions = setOf(
+    "android.permission.READ_CONTACTS",
+    "android.permission.WRITE_CONTACTS",
+)
+
+private val removeContactsPermissionsResourcePatch = patch {
+    execute {
+        document("AndroidManifest.xml").use { document ->
+            val manifest = document.documentElement
+            val declared = manifest.childNodes.asSequence().filterIsInstance<Element>()
+                .filter { it.tagName == "uses-permission" && it.getAttribute("android:name") in contactsPermissions }
+                .toList()
+            val missing = contactsPermissions - declared.map { it.getAttribute("android:name") }.toSet()
+            if (missing.isNotEmpty()) throw PatchException("Permissions not declared: $missing")
+            declared.forEach { manifest.removeChild(it) }
+        }
+    }
+}
+
+@Suppress("unused")
+val removeContactsPermissionPatch: Patch = patch(
+    name = "Remove contacts permission",
+    description = "Stops BeReal from asking for or reading your phone's contacts.",
+) {
+    dependsOn(berealContactsPermissionExtensionPatch)
+    compatibleWith(AppCompatibilities.BEREAL)
+    availability(requireStandardInstall)
+
+    dependsOn(removeContactsPermissionsResourcePatch, beRealBasePatch)
+
+    execute {
+        markFeaturePatched("${BEREAL_EXTENSION_PACKAGE}ContactsPermission;", removeContactsPermissionPatch)
+    }
+}

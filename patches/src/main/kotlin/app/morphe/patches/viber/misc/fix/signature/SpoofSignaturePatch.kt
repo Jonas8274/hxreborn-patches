@@ -1,0 +1,31 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.viber.misc.fix.signature
+
+import app.morphe.patcher.patch.Patch
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.signature.spoofSignature
+import app.morphe.patches.viber.misc.settings.patchesSettingsPatch
+import app.morphe.patches.viber.shared.markPatchApplied
+import app.morphe.patches.shared.misc.extension.sharedSignatureExtensionPatch
+
+private const val APPLICATION_CLASS = "Lcom/viber/voip/ManifestViberApplication;"
+
+@Suppress("unused")
+val spoofSignaturePatch: Patch = patch(
+    name = "Spoof signature",
+    description = "Lets the app send and receive messages and get its push token.",
+) {
+    dependsOn(sharedSignatureExtensionPatch)
+    compatibleWith(AppCompatibilities.VIBER)
+
+    dependsOn(patchesSettingsPatch)
+
+    execute {
+        markPatchApplied("spoofSignature", spoofSignaturePatch)
+        spoofSignature(APPLICATION_CLASS)
+    }
+}
