@@ -1,0 +1,31 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.candycrushsaga.misc.lives
+
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.candycrushsaga.misc.boosters.candyCrushRewardsPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.requireArm64StandardInstall
+import app.morphe.patches.shared.misc.smali.replaceStub
+
+private const val BOOSTERS = "Lapp/hxreborn/extension/candycrushsaga/Boosters;"
+
+@Suppress("unused")
+val unlimitedLivesPatch = patch(
+    name = "Unlimited lives",
+    description = "Adds 24 hours of unlimited lives every time the game starts.",
+) {
+    compatibleWith(AppCompatibilities.CANDY_CRUSH_SAGA, AppCompatibilities.CANDY_CRUSH_SODA_SAGA)
+    availability(requireArm64StandardInstall)
+    dependsOn(candyCrushRewardsPatch)
+
+    execute {
+        mutableClassDefBy(BOOSTERS).replaceStub("livesEnabled", 1, """
+            const/4 v0, 0x1
+            return v0
+        """)
+    }
+}

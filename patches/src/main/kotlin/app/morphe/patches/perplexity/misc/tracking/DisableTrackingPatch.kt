@@ -1,0 +1,62 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.perplexity.misc.tracking
+
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.patch.document
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.getReference
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.shared.misc.kotlin.returnUnitEarly
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.analytics.SingularInitFingerprint
+import app.morphe.patches.shared.misc.analytics.disableAnalyticsCollectionPatch
+import app.morphe.patches.shared.misc.analytics.disableCrashlyticsCollectionPatch
+import app.morphe.patches.shared.misc.analytics.putApplicationMetaData
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference
+
+private val disableFirebaseSessionsAndPerformancePatch = patch {
+    execute {
+        document("AndroidManifest.xml").use { document ->
+            document.putApplicationMetaData("firebase_sessions_enabled", "false")
+            document.putApplicationMetaData("firebase_performance_collection_enabled", "false")
+        }
+    }
+}
+
+@Suppress("unused")
+val disableTrackingPatch = patch(
+    name = "Disable tracking",
+    description = "Stops usage events, crash reports and performance data from reaching Perplexity, " +
+        "Singular and Firebase.",
+) {
+    compatibleWith(AppCompatibilities.PERPLEXITY)
+
+    dependsOn(
+        disableAnalyticsCollectionPatch,
+        disableCrashlyticsCollectionPatch,
+        disableFirebaseSessionsAndPerformancePatch,
+    )
+
+    execute {
+        val payloadBuilder = AnalyticsEventPayloadFingerprint.method
+        val dispatch = analyticsEventDispatchFingerprint(payloadBuilder).matchOrNull()
+
+        if (dispatch == null) {
+            returnUnitEarly(payloadBuilder)
+        } else {
+            val (_, dispatchToSink) = dispatch.instructionMatches
+            val sinkType = dispatchToSink
+                .getInstruction<ReferenceInstruction>()
+                .getReference<MethodReference>()!!
+                .definingClass
+
+            analyticsEventSinkFingerprint(sinkType).matchAll().forEach { returnUnitEarly(it.method) }
+        }
+
+        SingularInitFingerprint.method.returnEarly(false)
+    }
+}
