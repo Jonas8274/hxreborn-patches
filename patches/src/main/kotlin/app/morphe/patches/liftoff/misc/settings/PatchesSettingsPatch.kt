@@ -1,0 +1,85 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.liftoff.misc.settings
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.patch.Patch
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.document
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.patch.resourceFile
+import app.morphe.patches.shared.misc.addAppliedPatchMetadata
+import app.morphe.patches.shared.misc.reactnative.ScrollViewLayoutFingerprint
+import app.morphe.patches.shared.misc.revenuecat.InvalidateCustomerInfoCacheFingerprint
+import app.morphe.patches.shared.misc.smali.replaceStub
+import org.w3c.dom.Element
+import app.morphe.patches.shared.misc.extension.liftoffSettingsExtensionPatch
+import app.morphe.patches.shared.misc.extension.morpheLibraryCoreExtensionPatch
+import app.morphe.patches.shared.misc.extension.sharedActivityCallbacksAdapterExtensionPatch
+import app.morphe.patches.shared.misc.extension.sharedDimensionsExtensionPatch
+
+internal const val LIFTOFF_PATCH_SETTINGS_CLASS = "Lapp/hxreborn/extension/liftoff/PatchSettings;"
+private const val LIFTOFF_PATCH_CONTEXT_CLASS = "Lapp/hxreborn/extension/liftoff/PatchContext;"
+private const val LIFTOFF_PATCHES_MENU_CLASS = "Lapp/hxreborn/extension/liftoff/PatchesMenu;"
+private const val LIFTOFF_APPLIED_PATCHES_CLASS = "Lapp/hxreborn/extension/liftoff/AppliedPatches;"
+private const val CACHE_INVALIDATION_REGISTERS = 0
+private val ICON_NAMES = listOf("back", "premium", "customizations", "reset", "info", "patches", "entry", "expand")
+
+internal fun markPatchApplied(key: String, patch: Patch) =
+    addAppliedPatchMetadata(LIFTOFF_APPLIED_PATCHES_CLASS, key, patch)
+
+internal val patchesSettingsPatch = run {
+    lateinit var applicationType: String
+    patch {
+    dependsOn(liftoffSettingsExtensionPatch, morpheLibraryCoreExtensionPatch, sharedActivityCallbacksAdapterExtensionPatch, sharedDimensionsExtensionPatch)
+        dependsOn(
+            patch {
+                execute {
+                    document("AndroidManifest.xml").use { document ->
+                        val application = document.getElementsByTagName("application").item(0) as Element
+                        val packageName = document.documentElement.getAttribute("package")
+                        val applicationName = application.getAttribute("android:name")
+                        val resolvedName = when {
+                            applicationName.startsWith('.') -> packageName + applicationName
+                            '.' !in applicationName -> "$packageName.$applicationName"
+                            else -> applicationName
+                        }
+                        applicationType = "L${resolvedName.replace('.', '/')};"
+                    }
+                    ICON_NAMES.forEach { name ->
+                        val filename = "hx_liftoff_ic_$name.xml"
+                        val resource = LiftoffResources::class.java.getResourceAsStream("/liftoff/drawable/$filename")
+                            ?: throw PatchException("Missing patch icon $filename")
+                        resource.use { icon ->
+                            resourceFile("res/drawable/$filename").outputStream().use(icon::copyTo)
+                        }
+                    }
+                }
+            },
+        )
+        execute {
+            applicationOnCreateFingerprint(applicationType).method.addInstruction(
+                0,
+                "invoke-static/range { p0 .. p0 }, $LIFTOFF_PATCH_CONTEXT_CLASS->attach(Landroid/app/Application;)V",
+            )
+            ScrollViewLayoutFingerprint.method.addInstruction(
+                0,
+                "invoke-static/range { p0 .. p0 }, $LIFTOFF_PATCHES_MENU_CLASS->onScrollLayout(Landroid/widget/ScrollView;)V",
+            )
+            val invalidation = InvalidateCustomerInfoCacheFingerprint.method
+            mutableClassDefBy(LIFTOFF_PATCH_SETTINGS_CLASS).replaceStub(
+                "invalidatePremiumCache",
+                CACHE_INVALIDATION_REGISTERS,
+                """
+                    invoke-static {}, ${invalidation.definingClass}->${invalidation.name}()V
+                    return-void
+                """,
+            )
+        }
+    }
+}
+
+private object LiftoffResources

@@ -1,0 +1,45 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.hypic.misc.fix.signature
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.patch.packageMetadata
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.signature.spoofSignature
+import app.morphe.patches.shared.misc.signature.stockSigningCertificate
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import java.security.MessageDigest
+import app.morphe.patches.shared.misc.extension.sharedSignatureExtensionPatch
+
+private const val APPLICATION_CLASS = "Lcom/xt/retouch/MainApplication;"
+
+private const val APK_SIGNATURE_V3_PREFIX = "S3:"
+
+val spoofSignaturePatch = patch {
+    dependsOn(sharedSignatureExtensionPatch)
+    compatibleWith(AppCompatibilities.HYPIC)
+    execute {
+        spoofSignature(APPLICATION_CLASS)
+
+        val stockPublicKeyMd5Hex = MessageDigest.getInstance("MD5")
+            .digest(packageMetadata.stockSigningCertificate().publicKey.encoded)
+            .joinToString("") { "%02X".format(it) }
+
+        ApkFileSignatureReportFingerprint.match().let { match ->
+            val (_, nativeSignatureResult) = match.instructionMatches
+            val signatureRegister = nativeSignatureResult.getInstruction<OneRegisterInstruction>().registerA
+            match.method.addInstruction(
+                nativeSignatureResult.index + 1,
+                "const-string v$signatureRegister, \"$APK_SIGNATURE_V3_PREFIX$stockPublicKeyMd5Hex\"",
+            )
+        }
+
+        SecuritySdkInitFingerprint.match().let { match ->
+            val (configBuilderNewInstance) = match.instructionMatches
+            match.method.addInstruction(configBuilderNewInstance.index, "return-void")
+        }
+    }
+}

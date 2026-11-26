@@ -1,0 +1,41 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.lumo.misc.premium
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.lumo.misc.PageStartedFingerprint
+import app.morphe.patches.lumo.misc.pairip.restoreVirtualizedMethodsPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.pairip.removePairipProtectionPatch
+import app.morphe.patches.shared.misc.pairip.removePairipVirtualizationPatch
+import app.morphe.patches.shared.misc.requireArm64
+import app.morphe.patches.shared.misc.extension.lumoUnlockPremiumExtensionPatch
+import app.morphe.patches.shared.misc.extension.morpheLibraryCoreExtensionPatch
+
+private const val EXTENSION_CLASS = "Lapp/hxreborn/extension/lumo/LumoPlus;"
+
+@Suppress("unused")
+val unlockPremiumPatch = patch(
+    name = "Unlock premium",
+    description = "Unlocks unlimited projects and removes upgrade prompts. " +
+        "Usage limits for models, messages and images still apply.",
+) {
+    dependsOn(lumoUnlockPremiumExtensionPatch, morpheLibraryCoreExtensionPatch)
+    compatibleWith(AppCompatibilities.LUMO)
+    dependsOn(
+        removePairipVirtualizationPatch,
+        removePairipProtectionPatch,
+        restoreVirtualizedMethodsPatch,
+    )
+    availability(requireArm64)
+
+    execute {
+        PageStartedFingerprint.method.addInstructions(
+            0,
+            "invoke-static { p1 }, $EXTENSION_CLASS->unlock(Landroid/webkit/WebView;)V",
+        )
+    }
+}

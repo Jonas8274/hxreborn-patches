@@ -1,0 +1,92 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.protonmail.misc.banner
+
+import app.morphe.patcher.anyInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.fieldAccess
+import app.morphe.patcher.patch.PatchException
+import app.morphe.patcher.patch.mutableClassDefBy
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.getReference
+import app.morphe.patches.protonmail.misc.fix.signature.spoofSignaturePatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.smali.replaceStub
+import app.morphe.util.findInstructionIndicesReversed
+import app.morphe.util.indexOfFirstInstructionOrThrow
+import app.morphe.util.indexOfFirstStringInstructionOrThrow
+import com.android.tools.smali.dexlib2.Opcode
+import com.android.tools.smali.dexlib2.iface.Method
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction
+import com.android.tools.smali.dexlib2.iface.reference.FieldReference
+import app.morphe.patches.shared.misc.extension.protonAutoDeleteBannerExtensionPatch
+import app.morphe.patches.shared.misc.extension.protonPatchApplicationExtensionPatch
+import app.morphe.patches.shared.misc.extension.protonSettingsThemeExtensionPatch
+import app.morphe.patches.shared.misc.extension.protonSettingsExtensionPatch
+import app.morphe.patches.shared.misc.extension.sharedProxyHandlerExtensionPatch
+
+internal const val AUTO_DELETE_BANNER_EXTENSION_CLASS =
+    "Lapp/hxreborn/extension/protonmail/AutoDeleteBanner;"
+
+internal fun answerAutoDeleteBannerCheck(stubName: String, check: String) =
+    mutableClassDefBy(AUTO_DELETE_BANNER_EXTENSION_CLASS).replaceStub(
+        stubName,
+        1,
+        """
+            invoke-static { }, $check
+            move-result v0
+            return v0
+        """,
+    )
+
+private fun Method.enumConstant(name: String): FieldReference =
+    getInstruction<ReferenceInstruction>(
+        indexOfFirstInstructionOrThrow(indexOfFirstStringInstructionOrThrow(name), Opcode.SPUT_OBJECT),
+    ).reference as FieldReference
+
+val autoDeleteBannerStatePatch = patch {
+    dependsOn(protonAutoDeleteBannerExtensionPatch, protonPatchApplicationExtensionPatch, protonSettingsThemeExtensionPatch, protonSettingsExtensionPatch, sharedProxyHandlerExtensionPatch)
+    compatibleWith(AppCompatibilities.PROTON_MAIL)
+    dependsOn(spoofSignaturePatch)
+
+    execute {
+        val stateFields = with(AutoDeleteStatesFingerprint.method) {
+            setOf(
+                enumConstant("AutoDeleteUpsell"),
+                enumConstant("AutoDeleteDisabled"),
+                enumConstant("AutoDeleteEnabled"),
+            )
+        }
+
+        val stateReads = anyInstruction(*stateFields.map { fieldAccess(it, Opcode.SGET_OBJECT) }.toTypedArray())
+        with(AutoDeleteBannerFingerprint.method) {
+            val stateReadIndices = findInstructionIndicesReversed(stateReads)
+
+            if (stateReadIndices.size != stateFields.size) {
+                throw PatchException(
+                    "Auto-delete banner state read count mismatch: expected ${stateFields.size}, " +
+                        "got ${stateReadIndices.size}",
+                )
+            }
+
+            stateReadIndices.forEach { index ->
+                val register = getInstruction<OneRegisterInstruction>(index).registerA
+                val stateType = getInstruction<ReferenceInstruction>(index)
+                    .getReference<FieldReference>()!!.type
+
+                addInstructions(
+                    index + 1,
+                    """
+                        invoke-static/range { v$register .. v$register }, $AUTO_DELETE_BANNER_EXTENSION_CLASS->resolveState(Ljava/lang/Object;)Ljava/lang/Object;
+                        move-result-object v$register
+                        check-cast v$register, $stateType
+                    """,
+                )
+            }
+        }
+    }
+}
