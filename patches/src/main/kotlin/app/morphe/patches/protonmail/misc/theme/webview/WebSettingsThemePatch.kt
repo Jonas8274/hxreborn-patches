@@ -1,0 +1,29 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.protonmail.misc.theme.webview
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.protonmail.misc.settings.patchesSettingsPatch
+import app.morphe.patches.shared.misc.extension.protonWebSettingsThemeExtensionPatch
+
+private const val EXTENSION_CLASS = "Lapp/hxreborn/extension/protonmail/WebSettingsTheme;"
+
+internal val webSettingsThemePatch = patch {
+    dependsOn(protonWebSettingsThemeExtensionPatch)
+    dependsOn(patchesSettingsPatch)
+
+    execute {
+        WebSettingsCreatedFingerprint.method.addInstructions(
+            0,
+            "invoke-static { p2 }, $EXTENSION_CLASS->hideBeforeStyling(Landroid/webkit/WebView;)V",
+        )
+
+        WebSettingsPageFinishedFingerprint.method.addInstructions(
+            0,
+            "invoke-static { p1 }, $EXTENSION_CLASS->injectEnabledStyles(Landroid/webkit/WebView;)V",
+        )
+    }
+}

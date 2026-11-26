@@ -1,0 +1,39 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.steezy.misc.tracking
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.analytics.disableCrashlyticsCollectionPatch
+import app.morphe.patches.shared.misc.analytics.disableFirebaseSessionsPatch
+
+@Suppress("unused")
+val disableTrackingPatch = patch(
+    name = "Disable tracking",
+    description = "Stops RudderStack, Branch, Firebase Sessions and Crashlytics from " +
+        "collecting usage data.",
+) {
+    compatibleWith(AppCompatibilities.STEEZY)
+
+    dependsOn(disableCrashlyticsCollectionPatch, disableFirebaseSessionsPatch)
+
+    execute {
+        RudderSetupFingerprint.method.addInstructions(
+            0,
+            """
+                const/4 v0, 0x0
+                invoke-interface { p3, v0 }, Lcom/facebook/react/bridge/Promise;->resolve(Ljava/lang/Object;)V
+                return-void
+            """,
+        )
+
+        val trackingDisabledForContext = BranchTrackingDisabledForContextFingerprint.match()
+        trackingDisabledForContext.method.returnEarly(true)
+        branchTrackingDisabledFingerprint(trackingDisabledForContext.classDef.type)
+            .method.returnEarly(true)
+    }
+}

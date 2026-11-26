@@ -1,0 +1,39 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.behisabi.misc.premium
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.getFreeRegisterProvider
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.pairip.removePairipProtectionPatch
+
+@Suppress("unused")
+val unlockPremiumPatch = patch(
+    name = "Unlock premium",
+    description = "Unlocks BeHisabi Pro features. AI features require your own API key.",
+) {
+    compatibleWith(AppCompatibilities.BEHISABI)
+    dependsOn(removePairipProtectionPatch)
+
+    execute {
+        val (_, lifetimeWrite) = LifetimeTierFingerprint.match().instructionMatches
+        val lifetime = lifetimeWrite.fieldReference
+        val proState = publishProStateFingerprint(lifetime.type).match()
+        val (_, playProRead, playTierRead) = proState.instructionMatches
+        val playPro = playProRead.fieldReference
+        val playTier = playTierRead.fieldReference
+        val proRegister = proState.method.getFreeRegisterProvider(0, 1).getFreeRegister4Bit()
+        proState.method.addInstructions(
+            0,
+            """
+                const/4 v$proRegister, 0x1
+                iput-boolean v$proRegister, p0, $playPro
+                sget-object v$proRegister, $lifetime
+                iput-object v$proRegister, p0, $playTier
+            """,
+        )
+    }
+}

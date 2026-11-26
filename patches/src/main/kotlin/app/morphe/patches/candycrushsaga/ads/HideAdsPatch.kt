@@ -1,0 +1,58 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.candycrushsaga.ads
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.shared.compat.AppCompatibilities
+
+private const val SDK_CLASS = "Lcom/king/abm/adprovider/AdProviderSDKAndroid;"
+private const val MODULE_CLASS = "Lcom/king/abm/adprovider/AdProviderModuleAndroid;"
+private const val NO_FILL_ERROR_CODE = 0x3
+private const val DISABLED_MESSAGE = "ads disabled"
+
+@Suppress("unused")
+val hideAdsPatch = patch(
+    name = "Hide ads",
+    description = "Stops ad networks from starting and blocks rewarded and interstitial ads.",
+) {
+    compatibleWith(
+        AppCompatibilities.BLOSSOM_BLAST_SAGA,
+        AppCompatibilities.CANDY_CRUSH_SAGA,
+        AppCompatibilities.CANDY_CRUSH_SODA_SAGA,
+    )
+
+    execute {
+        AdSdkInitFingerprint.method.addInstructions(
+            0,
+            """
+                iput-wide p1, p0, $SDK_CLASS->mAdProviderAddress:J
+                const-string p1, "$DISABLED_MESSAGE"
+                invoke-virtual { p0, p1 }, $SDK_CLASS->onSDKInitFailed(Ljava/lang/String;)V
+                return-void
+            """,
+        )
+        AdSdkCollectBidderTokenFingerprint.method.addInstructions(
+            0,
+            """
+                iget-wide v0, p0, $SDK_CLASS->mAdProviderAddress:J
+                const/4 v2, 0x0
+                const-string v3, "$DISABLED_MESSAGE"
+                invoke-static { v0, v1, p1, v2, v3 }, $SDK_CLASS->collectBidderTokenJNI(JILjava/lang/String;Ljava/lang/String;)V
+                return-void
+            """,
+        )
+        AdLoadFingerprint.method.addInstructions(
+            0,
+            """
+                iput-wide p1, p0, $MODULE_CLASS->mAdProviderAddress:J
+                const/16 p1, $NO_FILL_ERROR_CODE
+                const-string p2, "$DISABLED_MESSAGE"
+                invoke-virtual { p0, p1, p2 }, $MODULE_CLASS->onLoadFailed(ILjava/lang/String;)V
+                return-void
+            """,
+        )
+    }
+}
