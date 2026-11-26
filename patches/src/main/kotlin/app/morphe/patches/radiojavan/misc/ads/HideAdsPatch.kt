@@ -1,0 +1,37 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.radiojavan.misc.ads
+
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.returnEarly
+import app.morphe.patches.radiojavan.shared.subscriptionGetterFingerprint
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.ads.failAdMobLoadsPatch
+import app.morphe.patches.shared.misc.ads.removeMobileAdsInitProviderPatch
+
+internal val disableSubscriptionAdFlagsPatch = patch {
+    execute {
+        listOf("getDisplayAds", "getAudioAds").forEach {
+            subscriptionGetterFingerprint(it).method.returnEarly(false)
+        }
+    }
+}
+
+@Suppress("unused")
+val hideAdsPatch = patch(
+    name = "Hide ads",
+    description = "Removes banner, interstitial, app open and podcast audio ads, the launch promo video " +
+        "and the ad consent form.",
+) {
+    compatibleWith(AppCompatibilities.RADIO_JAVAN)
+
+    dependsOn(disableSubscriptionAdFlagsPatch, failAdMobLoadsPatch, removeMobileAdsInitProviderPatch)
+
+    execute {
+        SetCtaOverlayFingerprint.method.returnEarly()
+        ConsentRequestFingerprint.method.returnEarly()
+        MobileAdsInitializeFingerprint.method.returnEarly()
+    }
+}

@@ -1,0 +1,279 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *
+ * Additional term under GPLv3 Section 7(b): When conveying this material
+ * or modified versions, preserve this notice and credit hxreborn for this
+ * material in any Appropriate Legal Notices displayed by works containing it.
+ */
+package app.hxreborn.extension.viber;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.view.MenuItem;
+
+@SuppressWarnings("unused")
+public final class PatchSettings {
+
+    static final String LOG_TAG = "hxViber";
+
+    static final String DISABLED_KEY_PREFIX = "hx_disabled_";
+
+    private static final int SILENT_DELETED_MESSAGE_MIME = 1007;
+
+    private static final String START_FOLDER = "start_folder";
+
+    private static final String SELECTED_BUSINESS_CHATS = "selected_business_chats";
+
+    private static final int RAISED_FOLDER_LIMIT = 10;
+
+    private static SharedPreferences preferences;
+
+    private PatchSettings() {
+    }
+
+    public static void initialize(Context context) {
+        preferences = context.getSharedPreferences("hx_viber_patches", Context.MODE_PRIVATE);
+    }
+
+    static boolean isEnabled(String key) {
+        boolean defaultValue = !PatchSetting.DISAPPEARING_MEDIA_PRIVACY.key.equals(key);
+        return (preferences != null) ? preferences.getBoolean(key, defaultValue) : defaultValue;
+    }
+
+    @SuppressLint("ApplySharedPref")
+    static void setEnabled(String key, boolean enabled) {
+        if (preferences != null) {
+            preferences.edit().putBoolean(key, enabled).commit();
+        }
+    }
+
+    @SuppressLint("ApplySharedPref")
+    static boolean resetToDefaults() {
+        return (preferences != null) && preferences.edit().clear().commit();
+    }
+
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    public static boolean removeChatPayments() {
+        return AppliedPatches.removeChatPayments() && isEnabled(PatchSetting.REMOVE_CHAT_PAYMENTS.key);
+    }
+
+    public static boolean removeDeletedMessageNotices() {
+        return AppliedPatches.removeDeletedMessageNotices()
+                && isEnabled(PatchSetting.REMOVE_DELETED_MESSAGE_NOTICES.key);
+    }
+
+    public static boolean hasStatusUnlessRemovingNotices(boolean hasStatus) {
+        return hasStatus && !removeDeletedMessageNotices();
+    }
+
+    public static boolean showDeleteWithoutTraceOption(boolean shown) {
+        return shown && !removeDeletedMessageNotices();
+    }
+
+    public static int deletedMessageMime(int notice) {
+        return removeDeletedMessageNotices() ? SILENT_DELETED_MESSAGE_MIME : notice;
+    }
+
+    public static String deletedMessageBody(String notice) {
+        return removeDeletedMessageNotices() ? "" : notice;
+    }
+
+    public static boolean hideImageRemix() {
+        return AppliedPatches.hideImageRemix() && isEnabled(PatchSetting.HIDE_IMAGE_REMIX.key);
+    }
+
+    public static boolean disableAiFeatures() {
+        return AppliedPatches.disableAiFeatures() && isEnabled(PatchSetting.DISABLE_AI_FEATURES.key);
+    }
+
+    public static boolean removeListGaps() {
+        return AppliedPatches.removeListGaps() && isEnabled(PatchSetting.REMOVE_LIST_GAPS.key);
+    }
+
+    public static boolean removeTypingPrivacyBanner() {
+        return AppliedPatches.removeTypingPrivacyBanner() && isEnabled(PatchSetting.REMOVE_TYPING_PRIVACY_BANNER.key);
+    }
+
+    public static boolean hideAds() {
+        return AppliedPatches.hideAds() && isEnabled(PatchSetting.HIDE_ADS.key);
+    }
+
+    public static boolean hidePromotions() {
+        return AppliedPatches.hidePromotions() && isEnabled(PatchSetting.HIDE_PROMOTIONS.key);
+    }
+
+    public static boolean showPromotion(boolean shown) {
+        return shown && !hidePromotions();
+    }
+
+    public static boolean unlockViberPlus() {
+        return AppliedPatches.unlockViberPlus() && isEnabled(PatchSetting.UNLOCK_VIBER_PLUS.key);
+    }
+
+    public static boolean unlockTypingPrivacy(boolean original) {
+        return original || unlockViberPlus();
+    }
+
+    public static boolean ignoreAccentsInContactSearch() {
+        return AppliedPatches.ignoreAccentsInContactSearch()
+                && isEnabled(PatchSetting.IGNORE_ACCENTS_IN_CONTACT_SEARCH.key);
+    }
+
+    public static boolean removeOnlineStatusLimit() {
+        return AppliedPatches.removeOnlineStatusLimit() && isEnabled(PatchSetting.REMOVE_ONLINE_STATUS_LIMIT.key);
+    }
+
+    public static long lastOnlineChangeTime(long lastChanged) {
+        return removeOnlineStatusLimit() ? 0L : lastChanged;
+    }
+
+    public static boolean disappearingMediaPrivacy() {
+        return AppliedPatches.disappearingMediaPrivacy() && isEnabled(PatchSetting.DISAPPEARING_MEDIA_PRIVACY.key);
+    }
+
+    public static boolean saveDisappearingMedia() {
+        return AppliedPatches.saveDisappearingMedia() && isEnabled(PatchSetting.SAVE_DISAPPEARING_MEDIA.key);
+    }
+
+    public static boolean blocksMediaSave(boolean disappearing) {
+        return disappearing && !saveDisappearingMedia();
+    }
+
+    public static boolean linkAsSecondaryDevice() {
+        return AppliedPatches.linkAsSecondaryDevice() && isEnabled(PatchSetting.LINK_AS_SECONDARY_DEVICE.key);
+    }
+
+    public static boolean activateAsSecondary(boolean tablet) {
+        return tablet || linkAsSecondaryDevice();
+    }
+
+    public static String[] filterBackupPermissions(String[] permissions) {
+        if (!linkAsSecondaryDevice()) {
+            return permissions;
+        }
+        List<String> required = new ArrayList<>();
+        for (String permission : permissions) {
+            if (!Manifest.permission.GET_ACCOUNTS.equals(permission)
+                    && !Manifest.permission.READ_CONTACTS.equals(permission)
+                    && !Manifest.permission.WRITE_CONTACTS.equals(permission)) {
+                required.add(permission);
+            }
+        }
+        return required.toArray(new String[0]);
+    }
+
+    public static boolean restrictBackupToPrimary(boolean secondary) {
+        return secondary && !linkAsSecondaryDevice();
+    }
+
+    @SuppressWarnings("BooleanMethodIsAlwaysInverted")
+    public static boolean hideMoreItems() {
+        return AppliedPatches.hideMoreItems() && isEnabled(PatchSetting.HIDE_MORE_ITEMS.key);
+    }
+
+    public static boolean hideNavigationButtons() {
+        return AppliedPatches.hideNavigationButtons() && isEnabled(PatchSetting.HIDE_NAVIGATION_BUTTONS.key);
+    }
+
+    public static boolean unfiledChats() {
+        return AppliedPatches.unfiledChats() && isEnabled(PatchSetting.UNFILED_CHATS.key);
+    }
+
+    public static boolean raiseFolderLimit() {
+        return AppliedPatches.raiseFolderLimit() && isEnabled(PatchSetting.RAISE_FOLDER_LIMIT.key);
+    }
+
+    public static int folderLimit(int limit) {
+        return raiseFolderLimit() ? Math.max(limit, RAISED_FOLDER_LIMIT) : limit;
+    }
+
+    static String startFolder() {
+        return (preferences != null) ? preferences.getString(START_FOLDER, "") : "";
+    }
+
+    @SuppressLint("ApplySharedPref")
+    static void setStartFolder(String folderId) {
+        if (preferences != null) {
+            preferences.edit().putString(START_FOLDER, folderId).commit();
+        }
+    }
+
+    static Set<String> selectedBusinessChats() {
+        return (preferences != null)
+                ? new HashSet<>(preferences.getStringSet(SELECTED_BUSINESS_CHATS, Collections.emptySet()))
+                : new HashSet<>();
+    }
+
+    @SuppressLint("ApplySharedPref")
+    static void setSelectedBusinessChats(Set<String> selected) {
+        if (preferences != null) {
+            preferences.edit().putStringSet(SELECTED_BUSINESS_CHATS, selected).commit();
+        }
+    }
+
+    public static boolean filterBusinessChats() {
+        return AppliedPatches.filterBusinessChats() && isEnabled(PatchSetting.FILTER_BUSINESS_CHATS.key);
+    }
+
+    public static boolean disableAnalytics() {
+        return AppliedPatches.disableAnalytics() && isEnabled(PatchSetting.DISABLE_ANALYTICS.key);
+    }
+
+    public static List<?> filterMoreItems(List<?> original) {
+        if (!hideMoreItems()) {
+            return original;
+        }
+        List<Object> filtered = new ArrayList<>(original.size());
+        for (Object item : original) {
+            if (!isHiddenMoreItem(itemId(item))) {
+                filtered.add(item);
+            }
+        }
+        return filtered;
+    }
+
+    public static int itemId(Object item) {
+        return 0;
+    }
+
+    public static boolean isHiddenMoreItem(int id) {
+        return false;
+    }
+
+    public static boolean isHiddenMainMenuItem(int id) {
+        return false;
+    }
+
+    public static boolean mainMenuItemVisible(MenuItem item, boolean visible) {
+        if (!visible || item == null || !hideMoreItems()) {
+            return visible;
+        }
+        return !isHiddenMainMenuItem(item.getItemId());
+    }
+
+    public static Boolean analyticsCollectionEnabled(Boolean enabled) {
+        return disableAnalytics() ? Boolean.FALSE : enabled;
+    }
+
+}
