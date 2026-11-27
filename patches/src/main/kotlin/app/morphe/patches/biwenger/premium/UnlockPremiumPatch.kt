@@ -1,0 +1,32 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.biwenger.premium
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.biwenger.shared.PageStartedFingerprint
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.extension.biwengerFetchRewriteExtensionPatch
+import app.morphe.patches.shared.misc.extension.biwengerUnlockPremiumExtensionPatch
+
+private const val INSTALL = "Lapp/hxreborn/extension/biwenger/PremiumLeagues;->install(Landroid/webkit/WebView;)V"
+
+@Suppress("unused")
+val unlockPremiumPatch = patch(
+    name = "Unlock premium",
+    description = "Unlocks the Premium league settings that the server accepts. " +
+        "The server refuses custom scoring, release clauses, substitutes and player tracking. " +
+        "Actions that cost credits still charge you, with no confirmation.",
+) {
+    dependsOn(biwengerFetchRewriteExtensionPatch, biwengerUnlockPremiumExtensionPatch)
+    compatibleWith(AppCompatibilities.BIWENGER)
+
+    execute {
+        PageStartedFingerprint.method.addInstructions(
+            0,
+            "invoke-static { p1 }, $INSTALL",
+        )
+    }
+}

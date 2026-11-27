@@ -1,0 +1,44 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.sqcom.ads
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.extensions.InstructionExtensions.addInstructions
+import app.morphe.patcher.extensions.InstructionExtensions.getInstruction
+import app.morphe.patcher.patch.patch
+import app.morphe.patcher.util.getFreeRegisterProvider
+import app.morphe.patches.shared.compat.AppCompatibilities
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+
+@Suppress("unused")
+val hideAdsPatch = patch(
+    name = "Hide ads",
+    description = "Removes splash, banner, native, interstitial and rewarded ads, " +
+        "and the ad consent prompt.",
+) {
+    compatibleWith(AppCompatibilities.SQCOM)
+
+    execute {
+        val adListResponse = AdListResponseFingerprint.match()
+        val (_, _, adListResult) = adListResponse.instructionMatches
+        val adListRegister = adListResult.getInstruction<OneRegisterInstruction>().registerA
+        adListResponse.method.addInstruction(adListResult.index + 1, "const/16 v$adListRegister, 0x0")
+
+        val consentRequest = ConsentRequestFingerprint.method
+        val listenerType = consentRequest.parameterTypes.last().toString()
+        val listenerMethod = consentListenerFingerprint(listenerType).method
+        val listenerCall = "$listenerType->${listenerMethod.name}($FORM_ERROR_TYPE)V"
+        val listenerRegister = consentRequest.implementation!!.registerCount - 1
+        val nullFormError = consentRequest.getFreeRegisterProvider(0, 1, listenerRegister).getFreeRegister4Bit()
+        consentRequest.addInstructions(
+            0,
+            """
+                const/4 v$nullFormError, 0x0
+                invoke-interface { v$listenerRegister, v$nullFormError }, $listenerCall
+                return-void
+            """,
+        )
+    }
+}

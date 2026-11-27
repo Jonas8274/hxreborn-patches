@@ -1,0 +1,26 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.arcplayer.misc.premium
+
+import app.morphe.patcher.extensions.InstructionExtensions.addInstruction
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction
+
+@Suppress("unused")
+val unlockPremiumPatch = patch(
+    name = "Unlock premium",
+    description = "Unlocks the pure black theme and custom subtitle fonts, and removes the premium prompts.",
+) {
+    compatibleWith(AppCompatibilities.ARC_PLAYER)
+
+    execute {
+        val premiumStateInit = PremiumStateInitFingerprint.match()
+        val (_, _, premiumWrite) = premiumStateInit.instructionMatches
+        val premiumRegister = premiumWrite.getInstruction<OneRegisterInstruction>().registerA
+
+        premiumStateInit.method.addInstruction(premiumWrite.index, "const/4 v$premiumRegister, 0x1")
+    }
+}
