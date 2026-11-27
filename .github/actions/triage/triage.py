@@ -1,0 +1,373 @@
+#!/usr/bin/env python3
+"""python3 triage.py <issue-body-file> [patches-list.json]"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parents[2] / "scripts"))
+from fields import (asks_for_additional_feature, asks_for_feature, code_span, contradicting_app, field, has_any, has_image, has_media,
+                    is_placeholder, normalize, normalize_version, parse_fields, placeholder_answers, thin_answers, word_count)
+from versions import prerelease_words, same_variant
+from replies import APK_SOURCES, BROKEN_FORMS, CLOSED_FOOTER, bundle, closed, code_list, missing, supported_downloads
+
+MIN_WORDS = 3
+CLEAR_WORDS = 8
+
+REPO = os.environ.get("GITHUB_REPOSITORY", "")
+NEW_ISSUE = f"https://github.com/{REPO}/issues/new"
+
+APP_NAME_FIELDS = ("App and version", "App name", "App", "Target app", "App version patched")
+APP_VERSION_FIELDS = ("Other version", "App version", "Broken app version", "App version patched",
+                      "App and version")
+DESCRIPTION_FIELDS = ("Bug description", "What happens", "Describe the bug", "Summary")
+STEP_FIELDS = ("Steps to reproduce", "Expected behaviour", "Actual behaviour")
+ANSWER_FIELDS = ("Bug description", "Device and Android version", "APK source")
+LOG_FIELDS = ("Debug log", "Error logs", "Morphe logs", "Logs")
+SOURCE_FIELDS = ("APK source", "APK source and type", "APK source and architecture")
+BUNDLE_VERSION = r"\d+\.\d+\.\d+(?:-dev\.\d+)?"
+BUNDLE_SOURCE = re.compile(rf"^[ \t]*Source:[ \t]*hxreborn[\u2019']s patches[ \t]+v?({BUNDLE_VERSION})[ \t]*$", re.I | re.M)
+
+REPACKAGERS = ("softonic", "happymod", "apkmod", "apkmody", "modyolo", "moddroid", "an1.com", "rexdl",
+               "apkdone", "liteapks", "apkmb", "apk4free", "androeed", "apkrabi")
+
+MARKER = "<!-- triage-bot -->"
+
+REPORT = re.compile(
+    r"Exception|Error|INSTALL_FAILED|Failed to match|Manager:|manager=|\(API \d+\)|^[ \t]+at \S"
+    r"|Fatal signal|SIG(?:SEGV|ABRT|BUS|ILL)|backtrace:|user-attachments/files/"
+    r"|https?://(?:www\.)?(?:pastebin\.com|gist\.github\.com|paste\.ee|hastebin\.com|dpaste\.org|rentry\.co)/\S+", re.I | re.M
+)
+
+STRONG_REPORT = re.compile(
+    r"INSTALL_FAILED|\b[A-Za-z][\w.$]*(?:Exception|Error)\b|Failed to match|^[ \t]*(?:Manager|Patcher|Failed patch):[ \t]*\S"
+    r"|^[ \t]*Source:[ \t]*hxreborn|^[ \t]+at [\w$.<>]+\(|Fatal signal|SIG(?:SEGV|ABRT|BUS|ILL)|backtrace:"
+    r"|user-attachments/files/"
+    r"|https?://(?:www\.)?(?:pastebin\.com|gist\.github\.com|paste\.ee|hastebin\.com|dpaste\.org|rentry\.co)/\S+", re.M
+)
+GLUED_LOG_HEADING = re.compile(rf"^(###[ \t]+(?:{'|'.join(map(re.escape, LOG_FIELDS))}))(?=[A-Z])", re.M)
+NOT_EVIDENCE_FIELDS = {normalize(name) for name in ("APK source", "APK source and type", "APK source and architecture",
+                                                     "Device and Android version", "Acknowledgements")}
+VISUAL_PROBLEM = re.compile(
+    r"\b(?:layout|overlap\w*|cut ?off|clipped|truncated|misaligned|stretched|glitch\w*|flicker\w*|blurr?y|colou?rs?|theme|"
+    r"dark mode|icons?|fonts?|invisible|unreadable|(?:blank|black|white|green) (?:screen|page))\b", re.I)
+
+OPTIONS_INSTALL_FAILED = ("patchingworkedinstallfailed", "patchingfinishedtheapkwouldnotinstall")
+OPTIONS_PATCHING_FAILED = ("patchingfailed", "patchingstartedandstoppedwithanerror")
+OPTIONS_CRASH = ("theappwillnotopenatall", "theappopensthencrashes")
+OPTION_DID_NOT_START = "patchingdidnotstart"
+OPTION_STOCK_FAILS_TOO = "theunpatchedappfailsthesameway"
+OPTION_NOT_TRIED = "ihavenottried"
+OPTIONS_PATCH_INEFFECTIVE = (
+    "thepatchedfeatureisstilllocked",
+    "thepatchhasnovisibleeffect",
+    "apatchismissingfromthelistinmanager",
+)
+
+OPTIONS_RUNTIME_WITHOUT_LOGS = (*OPTIONS_PATCH_INEFFECTIVE, "somethingelsetheappusedtodostoppedworking")
+
+body_path = Path(sys.argv[1])
+list_path = Path(sys.argv[2]) if len(sys.argv) > 2 else Path("patches-list.json")
+
+
+def supported_apps(data):
+    apps = {}
+    for patch in data["patches"]:
+        for package in patch.get("compatiblePackages") or []:
+            key = (package["name"], package["packageName"])
+            versions = apps.setdefault(key, set())
+            for target in package.get("targets") or []:
+                if target.get("version"):
+                    versions.add(target["version"])
+    return apps
+
+
+def host(url):
+    try:
+        return urlparse(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+def repackager_in(text):
+    return next((h for h in REPACKAGERS if re.search(rf"(?:^|[/.@\s]){re.escape(h)}(?![a-z0-9])", text.lower())), "")
+
+
+def version_cores(version):
+    return {normalize(m.group(0)) for m in re.finditer(r"(?<![\d.])\d+(?:\.\d+)+", version)}
+
+
+def version_key(version):
+    match = re.search(r"\d+(?:\.\d+)+", version)
+    return tuple(int(part) for part in match.group(0).split(".")) if match else None
+
+
+def newer_than_all(version, targets):
+    key = version_key(version)
+    target_keys = [k for k in map(version_key, targets) if k]
+    return bool(key and target_keys and key > max(target_keys))
+
+
+def matches_target(target):
+    if prerelease_words(typed_version) != prerelease_words(target):
+        return False
+    if version_tokens & target_forms(target):
+        return True
+    cores = version_tokens | version_cores(app_version)
+    return same_variant(typed_version, target) and bool(cores & (target_forms(target) | version_cores(target)))
+
+
+def report_manifest(fields, path):
+    current = json.loads(path.read_text(encoding="utf-8"))
+    form_version = field(fields, "Patches version")
+    form_match = re.fullmatch(rf"v?({BUNDLE_VERSION})", form_version, re.I)
+    versions = {version.lower() for value in fields.values() for version in BUNDLE_SOURCE.findall(value)}
+    if form_match:
+        versions.add(form_match[1].lower())
+    if len(versions) > 1:
+        return current, "unverified", "The report names more than one patches version. Please confirm which one was used."
+    if not versions:
+        if form_version:
+            return current, "unverified", "Please add the exact patches version so app support can be checked."
+        return current, "current", ""
+
+    version = versions.pop()
+    result = subprocess.run(["git", "-C", path.parent, "show", f"refs/tags/v{version}:./{path.name}"],
+                            capture_output=True, text=True)
+    if result.returncode == 0:
+        try:
+            tagged = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            tagged = None
+        if isinstance(tagged, dict) and tagged.get("version") == version and isinstance(tagged.get("patches"), list):
+            return tagged, "reported", ""
+    return current, "unverified", f"App support could not be checked against patches `{version}`."
+
+
+issue_body = GLUED_LOG_HEADING.sub(r"\1\n", body_path.read_text(encoding="utf-8"))
+fields = parse_fields(issue_body)
+data, manifest_source, manifest_note = report_manifest(fields, list_path)
+apps = supported_apps(data)
+
+described = field(fields, *DESCRIPTION_FIELDS)
+description = "\n".join(part for part in (
+    [described] if described else [field(fields, n) for n in STEP_FIELDS]) if part and not is_placeholder(part))
+if not has_any(fields, *DESCRIPTION_FIELDS, *STEP_FIELDS):
+    description = max(fields.values(), key=len, default="")
+description_words = word_count(description)
+
+app_name = field(fields, *APP_NAME_FIELDS)
+reported_versions = [v for v in (field(fields, n) for n in APP_VERSION_FIELDS) if v]
+app_version = " ".join(reported_versions)
+typed_version = reported_versions[0] if reported_versions else ""
+another_version = "another version" in app_name.lower() and not field(fields, "Other version")
+shown_name = re.sub(r"\(another version, type it below\)", "", app_name, flags=re.I).strip()
+reported = " ".join(dict.fromkeys(filter(None, (shown_name, typed_version))))
+app_haystack = reported or "\n".join(fields.values())
+version_words = [t for t in re.split(r"[\s(),`]+", app_version) if t.strip()]
+version_tokens = {normalize_version(t) for t in version_words} | {
+    normalize(a) + normalize(b) for a, b in zip(version_words, version_words[1:])
+}
+version_haystack = normalize(app_haystack)
+what_happened = field(fields, "What happened")
+apk_source = field(fields, *SOURCE_FIELDS)
+source_hosts = [host(url) for url in re.findall(r"https?://\S+", apk_source, re.I)]
+repackager_host = repackager_in(" ".join(source_hosts)) if all(map(repackager_in, source_hosts)) else ""
+repackager_named = repackager_in(apk_source)
+title = os.environ.get("ISSUE_TITLE", "")
+debug_log = field(fields, *LOG_FIELDS)
+evidence_text = "\n".join(value for key, value in fields.items() if normalize(key) not in NOT_EVIDENCE_FIELDS)
+report_attached = bool(REPORT.search(debug_log)) or bool(STRONG_REPORT.search(evidence_text))
+
+
+def target_forms(version):
+    numbered = [w for w in version.split() if any(c.isdigit() for c in w)]
+    return {normalize_version(version)} | {normalize_version(w) for w in numbered}
+
+
+blockers = []
+flags = []
+notes = [manifest_note] if manifest_note else []
+labels = []
+
+if not fields:
+    notes.append(
+        f"This issue has no form fields, so it can't be checked. Please open it again from one of the forms:\n\n{BROKEN_FORMS}"
+    )
+    labels.append("needs info")
+
+failure = normalize(field(fields, "What does not work"))
+logs_required = bool(what_happened) or not failure.startswith(OPTIONS_RUNTIME_WITHOUT_LOGS)
+answer_fields = list(ANSWER_FIELDS)
+if logs_required and not normalize(what_happened).startswith(OPTION_DID_NOT_START):
+    answer_fields.append("Error logs")
+if report_attached and "Error logs" in answer_fields:
+    answer_fields.remove("Error logs")
+blockers += placeholder_answers(fields, *answer_fields)
+
+step_answers = placeholder_answers(fields, *STEP_FIELDS) + thin_answers(fields, "Steps to reproduce")
+if step_answers and description_words < CLEAR_WORDS:
+    flags += step_answers
+    labels.append("needs info")
+
+device = field(fields, "Device and Android version")
+if device and not is_placeholder(device) and not re.search(r"\d", device):
+    blockers.append("The Device and Android version field doesn't say which Android version.")
+
+log_text = re.sub(r"^\s*(?:```|~~~).*$", "", debug_log, flags=re.M).strip()
+log_is_prose = ("Error logs" in answer_fields and bool(log_text) and not report_attached and not has_image(log_text)
+                and not is_placeholder(log_text))
+if log_is_prose:
+    blockers.append(
+        "The Error logs field has text instead of a log. Please attach the `adb logcat` file, the LogFox export "
+        "or the text Manager's Copy button gives."
+    )
+
+feature_text = "\n".join(filter(None, (description, debug_log)))
+actual_behaviour = field(fields, "Actual behaviour")
+described_runtime_failure = not logs_required and bool(actual_behaviour) and not is_placeholder(actual_behaviour)
+if asks_for_feature(feature_text) and (not described_runtime_failure or asks_for_additional_feature(feature_text)):
+    blockers.append(
+        f"This reads as a feature request. Please open it with the [feature request form]({NEW_ISSUE}?template=feature_request.yml)."
+    )
+
+shows_media = has_media(evidence_text)
+if fields and not report_attached and (
+    description_words < MIN_WORDS or (description_words < CLEAR_WORDS and not shows_media)
+):
+    flags.append(
+        f"The description has {description_words} {'word' if description_words == 1 else 'words'}, "
+        "which doesn't show what happens. Please say what happens and where."
+    )
+    labels.append("needs info")
+
+visual_description = "\n".join(filter(None, (description, title)))
+if (fields and not shows_media and VISUAL_PROBLEM.search(visual_description)
+        and not failure.startswith(OPTIONS_CRASH)):
+    notes.append(
+        "The report describes a problem on screen but has no screenshot or screen recording. "
+        "Please add one."
+    )
+
+matched = None
+best = (0, 0)
+normalized_app = normalize(app_haystack)
+for (name, package), versions in apps.items():
+    words = [normalize(word) for word in name.split() if len(word) > 3]
+    signals = [normalize(name), normalize(package)] + words
+    score = max((len(sig) for sig in signals if sig and sig in normalized_app), default=0)
+    rank = (score, -sum(word not in normalized_app for word in words))
+    if score and rank > best:
+        best, matched = rank, (name, versions)
+
+contradicted = contradicting_app(matched[0], f"{title}\n{apk_source}", apps) if matched and shown_name else ""
+
+if repackager_host:
+    blockers.append(
+        f"`{repackager_host}` repackages apps, which can break patching. "
+        f"Download the original APK from {APK_SOURCES} and patch it again."
+    )
+elif repackager_named:
+    flags.append(
+        f"The APK source mentions `{repackager_named}`, which repackages apps and can break patching. "
+        f"Please download the original APK from {APK_SOURCES} and patch it again."
+    )
+    labels.append("needs info")
+
+
+if not fields or (not matched and manifest_source == "unverified"):
+    pass
+elif not matched:
+    supported = ", ".join(sorted(name for name, _ in apps))
+    lead = (
+        f"{code_span(reported)} isn't supported by this bundle."
+        if reported
+        else "The report doesn't name a supported app."
+    )
+    flags.append(
+        f"{lead} {bundle(data['version'])} supports {supported}."
+    )
+    labels.append("needs info")
+elif contradicted:
+    blockers.append(
+        f"The app field says {code_span(shown_name)}, but the title or the APK source names {contradicted}. "
+        "Please pick the app you patched in that field."
+    )
+elif another_version:
+    flags.append(
+        "\"Another version\" is selected, but the Other version field is empty."
+    )
+    labels.append("needs info")
+elif manifest_source != "unverified" and matched[1] and not (
+    any(matches_target(v) for v in matched[1]) if version_tokens
+    else any(form in version_haystack for v in matched[1] for form in target_forms(v))
+):
+    name, versions = matched
+    typed = code_span(typed_version or reported)
+    newer = newer_than_all(typed_version, versions)
+    lead = f"{bundle(data['version'])} supports {name} {code_list(versions)}, but not {typed}{' yet' if newer else ''}."
+    if newer:
+        notes.append(
+            f"{lead} Please either:\n\n"
+            f"- patch one of the supported versions\n- open an [app update request]({NEW_ISSUE}?template=app_update.yml) for {typed}"
+        )
+    else:
+        notes.append(f"{lead} Please patch one of the supported versions.")
+    if downloads := supported_downloads(data, name):
+        notes.append(downloads)
+    labels.append("untargeted version")
+
+if normalize(what_happened).startswith(OPTIONS_INSTALL_FAILED) and not report_attached and not log_is_prose:
+    flags.append("Installation failed, but the Error logs field has no installer error.")
+    labels.append("needs info")
+
+if normalize(what_happened).startswith(OPTIONS_PATCHING_FAILED) and not report_attached and not log_is_prose:
+    flags.append(
+        "Patching failed, but the Error logs field has no error report. "
+        "Please tap Copy on Manager's error dialog and paste it there."
+    )
+    labels.append("needs info")
+
+if failure and logs_required and not report_attached and not log_is_prose:
+    flags.append(
+        "The Error logs field has no log. Please attach the `adb logcat` file or the LogFox export."
+    )
+    labels.append("needs info")
+
+patch_ineffective = failure.startswith(OPTIONS_PATCH_INEFFECTIVE)
+stock = "" if patch_ineffective else normalize(field(fields, "Does the unpatched app do the same thing"))
+
+if stock.startswith(OPTION_STOCK_FAILS_TOO):
+    flags.append(
+        "The unpatched app has the same problem. Please say whether the patched app behaves any differently."
+    )
+    labels.append("needs info")
+elif stock.startswith(OPTION_NOT_TRIED):
+    flags.append(
+        "The unpatched app hasn't been tried yet. Please install it and say whether it does the same."
+    )
+    labels.append("needs info")
+
+if blockers:
+    verdict = "close"
+    labels = []
+    sections = [closed(blockers + flags, CLOSED_FOOTER)]
+elif flags or notes:
+    verdict = "flag"
+    sections = notes + ([missing(flags)] if flags else [])
+else:
+    verdict = "pass"
+    sections = []
+
+print(json.dumps({
+    "verdict": verdict,
+    "labels": list(dict.fromkeys(labels)),
+    "app": contradicted or (matched[0] if matched else ""),
+    "manifest": {"source": manifest_source, "version": data["version"] if manifest_source != "unverified" else None},
+    "comment": MARKER + "\n" + "\n\n".join(sections) if sections else "",
+}))

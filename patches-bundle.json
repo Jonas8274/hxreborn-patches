@@ -1,0 +1,7 @@
+{
+  "created_at": "2026-11-26T18:55:13",
+  "description": "## [1.89.0-dev.8](https://github.com/hxreborn/morphe-patches/compare/v1.89.0-dev.7...v1.89.0-dev.8) (2026-11-26)\n\n### New Features\n\n* **Proton VPN - Enable guest mode:** add guest option to welcome screen ([78e9ad6](https://github.com/hxreborn/morphe-patches/commit/78e9ad6e9fcf50435436bdc3a44d44176ef4257d)), closes [#1088](https://github.com/hxreborn/morphe-patches/issues/1088)",
+  "download_url": "https://github.com/hxreborn/morphe-patches/releases/download/v1.89.0-dev.8/patches-1.89.0-dev.8.mpp",
+  "signature_download_url": "",
+  "version": "1.89.0-dev.8"
+}

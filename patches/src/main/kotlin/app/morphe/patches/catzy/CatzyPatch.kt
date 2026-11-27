@@ -1,0 +1,27 @@
+/*
+ * Copyright (C) 2026 hxreborn
+ * SPDX-License-Identifier: GPL-3.0-only
+ */
+package app.morphe.patches.catzy
+
+import app.morphe.patcher.patch.PatchAvailability
+import app.morphe.patcher.patch.patch
+import app.morphe.patches.catzy.misc.protection.removeAppProtectionPatch
+import app.morphe.patches.shared.compat.AppCompatibilities
+import app.morphe.patches.shared.misc.arm64Availability
+import app.morphe.patches.shared.misc.extension.kotlinUuidExtensionPatch
+
+internal fun catzyPatch(
+    name: String,
+    description: String,
+    selection: PatchAvailability = PatchAvailability.ENABLED,
+    block: () -> Unit,
+) = patch(name, description) {
+    compatibleWith(AppCompatibilities.CATZY)
+
+    availability(arm64Availability(selection))
+
+    dependsOn(removeAppProtectionPatch, kotlinUuidExtensionPatch)
+
+    execute(block)
+}
